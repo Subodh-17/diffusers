@@ -1,5 +1,6 @@
 import tempfile
 
+import numpy as np
 import torch
 
 from diffusers import (
@@ -283,6 +284,72 @@ class UniPCMultistepSchedulerTest(SchedulerCommonTest):
 
         assert abs(result_sum.item() - 315.5757) < 1e-2, f" expected result sum 315.5757, but get {result_sum}"
         assert abs(result_mean.item() - 0.4109) < 1e-3, f" expected result mean 0.4109, but get {result_mean}"
+
+    def test_custom_sigmas_flow_match_list(self):
+        scheduler_list = UniPCMultistepScheduler(
+            prediction_type="flow_prediction",
+            use_flow_sigmas=True,
+            flow_shift=3.0,
+        )
+        sigmas_list = [1.0, 0.8, 0.6, 0.4, 0.2]
+        scheduler_list.set_timesteps(sigmas=sigmas_list)
+
+        self.assertEqual(scheduler_list.sigmas.dtype, torch.float32)
+        self.assertTrue(torch.isfinite(scheduler_list.sigmas).all())
+        self.assertTrue(torch.isfinite(scheduler_list.timesteps).all())
+        self.assertEqual(len(scheduler_list.timesteps), len(sigmas_list))
+
+        sample = self.dummy_sample
+        for t in scheduler_list.timesteps:
+            residual = 0.1 * sample
+            sample = scheduler_list.step(residual, t, sample).prev_sample
+        self.assertEqual(sample.shape, self.dummy_sample.shape)
+        self.assertTrue(torch.isfinite(sample).all())
+
+    def test_custom_sigmas_flow_match_dynamic_shifting(self):
+        scheduler = UniPCMultistepScheduler(
+            prediction_type="flow_prediction",
+            use_flow_sigmas=True,
+            use_dynamic_shifting=True,
+        )
+        sigmas_list = [1.0, 0.8, 0.6, 0.4, 0.2]
+        scheduler.set_timesteps(sigmas=sigmas_list, mu=1.0)
+
+        self.assertEqual(scheduler.sigmas.dtype, torch.float32)
+        self.assertTrue(torch.isfinite(scheduler.sigmas).all())
+        self.assertTrue(torch.isfinite(scheduler.timesteps).all())
+        self.assertEqual(len(scheduler.timesteps), len(sigmas_list))
+
+    def test_custom_sigmas_flow_match_equivalence(self):
+        sigmas_list = [1.0, 0.8, 0.6, 0.4, 0.2]
+        sigmas_np = np.array(sigmas_list, dtype=np.float32)
+
+        scheduler_list = UniPCMultistepScheduler(
+            prediction_type="flow_prediction",
+            use_flow_sigmas=True,
+            flow_shift=3.0,
+        )
+        scheduler_list.set_timesteps(sigmas=sigmas_list)
+
+        scheduler_np = UniPCMultistepScheduler(
+            prediction_type="flow_prediction",
+            use_flow_sigmas=True,
+            flow_shift=3.0,
+        )
+        scheduler_np.set_timesteps(sigmas=sigmas_np)
+
+        self.assertTrue(torch.equal(scheduler_list.timesteps, scheduler_np.timesteps))
+        self.assertTrue(torch.allclose(scheduler_list.sigmas, scheduler_np.sigmas))
+
+    def test_custom_sigmas_without_flow_sigmas_raises(self):
+        scheduler = UniPCMultistepScheduler(use_flow_sigmas=False)
+        with self.assertRaises(ValueError):
+            scheduler.set_timesteps(sigmas=[1.0, 0.5])
+
+    def test_custom_sigmas_dynamic_shifting_missing_mu_raises(self):
+        scheduler = UniPCMultistepScheduler(use_flow_sigmas=True, use_dynamic_shifting=True)
+        with self.assertRaises(ValueError):
+            scheduler.set_timesteps(sigmas=[1.0, 0.5])
 
 
 class UniPCMultistepScheduler1DTest(UniPCMultistepSchedulerTest):
